@@ -868,7 +868,14 @@ RestWrite.prototype.runDatabaseOperation = function() {
   }
 
   if (this.className === '_Role') {
-    this.config.cacheController.role.clear();
+    if (this.data
+      && this.data.users
+      && this.data.users.__op
+      && 'AddRelation' === this.data.users.__op) {
+      for (let ii in this.data.users.objects) {
+        this.config.cacheController.role.del(this.data.users.objects[ii].objectId);
+      }
+    }
   }
 
   if (this.className === '_User' &&
