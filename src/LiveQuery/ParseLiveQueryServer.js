@@ -362,6 +362,8 @@ class ParseLiveQueryServer {
             // Then get the user's roles
           var rolesQuery = new Parse.Query(Parse.Role);
           rolesQuery.equalTo("users", user);
+          rolesQuery.descending("createdAt");
+          rolesQuery.limit(1000);
           return rolesQuery.find({useMasterKey:true});
         }).
         then((roles) => {
