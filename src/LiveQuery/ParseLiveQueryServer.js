@@ -8,6 +8,7 @@ import RequestSchema from './RequestSchema';
 import { matchesQuery, queryHash } from './QueryTools';
 import { ParsePubSub } from './ParsePubSub';
 import { SessionTokenCache } from './SessionTokenCache';
+import { ACLCache } from './ACLCache';
 import _ from 'lodash';
 
 class ParseLiveQueryServer {
@@ -79,6 +80,7 @@ class ParseLiveQueryServer {
 
     // Initialize sessionToken cache
     this.sessionTokenCache = new SessionTokenCache(config.cacheTimeout);
+    this.aclCache = new ACLCache({url: config.redisURL}, config.schemaCacheTTL);
   }
 
   // Message is the JSON object from publisher. Message.currentParseObject is the ParseObject JSON after changes.
@@ -314,6 +316,7 @@ class ParseLiveQueryServer {
     if (!acl || acl.getPublicReadAccess()) {
       return Parse.Promise.as(true);
     }
+
     // Check subscription sessionToken matches ACL first
     const subscriptionInfo = client.getSubscriptionInfo(requestId);
     if (typeof subscriptionInfo === 'undefined') {
@@ -332,54 +335,67 @@ class ParseLiveQueryServer {
       return new Parse.Promise((resolve, reject) => {
 
         // Resolve false right away if the acl doesn't have any roles
-        const acl_has_roles = Object.keys(acl.permissionsById).some(key => key.startsWith("role:"));
-        if (!acl_has_roles) {
+        const acl_has_roles = Object.keys(acl.permissionsById).filter(key => key.startsWith("role:"));
+        if (acl_has_roles.length < 1) {
           return resolve(false);
         }
 
-        this.sessionTokenCache.getUserId(subscriptionSessionToken)
-        .then((userId) => {
+        const roleChecks = [];
+        for (const role of acl_has_roles) {
+          roleChecks.push(this.aclCache.hasReadAccess(subscriptionSessionToken, role));
+        }
 
-            // Pass along a null if there is no user id
-          if (!userId) {
-            return Parse.Promise.as(null);
-          }
-
-            // Prepare a user object to query for roles
-            // To eliminate a query for the user, create one locally with the id
-          var user = new Parse.User();
-          user.id = userId;
-          return user;
-
-        })
-        .then((user) => {
-
-            // Pass along an empty array (of roles) if no user
-          if (!user) {
-            return Parse.Promise.as([]);
-          }
-
-            // Then get the user's roles
-          var rolesQuery = new Parse.Query(Parse.Role);
-          rolesQuery.equalTo("users", user);
-          rolesQuery.descending("createdAt");
-          rolesQuery.limit(1000);
-          return rolesQuery.find({useMasterKey:true});
-        }).
-        then((roles) => {
-
-            // Finally, see if any of the user's roles allow them read access
-          for (const role of roles) {
-            if (acl.getRoleReadAccess(role)) {
+        Parse.Promise.when(roleChecks).then((roleCheckMatches) => {
+          for (const roleCheck of roleCheckMatches) {
+            if (roleCheck === true) {
               return resolve(true);
             }
           }
-          resolve(false);
-        })
-        .catch((error) => {
-          reject(error);
-        });
 
+          this.sessionTokenCache.getUserId(subscriptionSessionToken)
+            .then((userId) => {
+
+              // Pass along a null if there is no user id
+              if (!userId) {
+                return Parse.Promise.as(null);
+              }
+
+              // Prepare a user object to query for roles
+              // To eliminate a query for the user, create one locally with the id
+              var user = new Parse.User();
+              user.id = userId;
+              return user;
+
+            })
+            .then((user) => {
+
+              // Pass along an empty array (of roles) if no user
+              if (!user) {
+                return Parse.Promise.as([]);
+              }
+
+              // Then get the user's roles
+              var rolesQuery = new Parse.Query(Parse.Role);
+              rolesQuery.equalTo("users", user);
+              rolesQuery.descending("createdAt");
+              rolesQuery.limit(1000);
+              return rolesQuery.find({useMasterKey:true});
+            }).
+            then((roles) => {
+
+              // Finally, see if any of the user's roles allow them read access
+              for (const role of roles) {
+                if (acl.getRoleReadAccess(role)) {
+                  this.aclCache.setHasReadAccess(subscriptionSessionToken, `role:${role.get('name')}`);
+                  return resolve(true);
+                }
+              }
+              resolve(false);
+            })
+            .catch((error) => {
+              reject(error);
+            });
+        });
       });
     }).then((isRoleMatched) => {
 
