@@ -80,7 +80,7 @@ class ParseLiveQueryServer {
 
     // Initialize sessionToken cache
     this.sessionTokenCache = new SessionTokenCache(config.cacheTimeout);
-    this.aclCache = new ACLCache({url: config.redisURL}, config.schemaCacheTTL);
+    this.aclCache = new ACLCache({url: config.redisCacheURL}, config.schemaCacheTTL);
   }
 
   // Message is the JSON object from publisher. Message.currentParseObject is the ParseObject JSON after changes.
